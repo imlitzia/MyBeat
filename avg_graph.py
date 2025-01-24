@@ -1,92 +1,113 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import os
+from matplotlib.widgets import Cursor
 from tkinter import Tk, filedialog
 
-# Load and process multiple spreadsheets
-def process_spreadsheets():
-    # Open a file dialog to select multiple spreadsheets
-    Tk().withdraw()  # Hide the main tkinter window
-    file_paths = filedialog.askopenfilenames(title="Select Excel Files", filetypes=[("Excel files", "*.xlsx *.xls")])
 
-    if not file_paths:
-        print("No files selected. Exiting program.")
+# Function to handle mouse wheel zoom
+def zoom(event, ax):
+    base_scale = 1.2
+    cur_xlim = ax.get_xlim()
+    cur_ylim = ax.get_ylim()
+    xdata = event.xdata  # Get mouse position
+    ydata = event.ydata
+
+    if xdata is None or ydata is None:
+        return  # Ignore zoom if outside axes
+
+    if event.button == 'up':  # Zoom in
+        scale_factor = 1 / base_scale
+    elif event.button == 'down':  # Zoom out
+        scale_factor = base_scale
+    else:  # Ignore other scroll events
         return
 
-    # Create an output folder for saving graphs
-    output_folder = "Processed_Graphs"
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
+    # Adjust limits
+    new_xlim = [xdata - (xdata - cur_xlim[0]) * scale_factor,
+                xdata + (cur_xlim[1] - xdata) * scale_factor]
+    new_ylim = [ydata - (ydata - cur_ylim[0]) * scale_factor,
+                ydata + (cur_ylim[1] - ydata) * scale_factor]
 
-    # Required columns (case insensitive)
-    required_columns = {'time', 'phase', 'lf/hf'}
+    ax.set_xlim(new_xlim)
+    ax.set_ylim(new_ylim)
+    ax.figure.canvas.draw_idle()  # Redraw the canvas
 
-    for file_path in file_paths:
-        try:
-            print(f"Processing file: {os.path.basename(file_path)}")
-            
-            # Read the data (assuming the sheet name is consistent or load the first sheet)
-            df = pd.read_excel(file_path)
 
-            # Normalize column names to lowercase for case-insensitive matching
-            df.columns = df.columns.str.lower()
+# Load the spreadsheet
+def process_spreadsheet():
+    # Open a file dialog to select the spreadsheet
+    Tk().withdraw()  # Hide the main tkinter window
+    file_path = filedialog.askopenfilename(title="Select an Excel File", filetypes=[("Excel files", "*.xlsx *.xls")])
 
-            # Check for missing columns
-            missing_columns = required_columns - set(df.columns)
-            if missing_columns:
-                print(f"File {os.path.basename(file_path)} is missing the following columns: {', '.join(missing_columns)}. Skipping.")
-                continue
+    if not file_path:
+        print("No file selected. Exiting program.")
+        return
 
-            # Rename columns to match expected capitalization
-            column_mapping = {
-                'time': 'Time',
-                'phase': 'Phase',
-                'lf/hf': 'LF/HF'
-            }
-            df.rename(columns=column_mapping, inplace=True)
+    try:
+        # Read the Excel file (load the first sheet by default)
+        df = pd.read_excel(file_path)
 
-            # Convert the Time column to datetime format
-            df['Time'] = pd.to_datetime(df['Time'], format='%H:%M:%S', errors='coerce')
+        # Normalize column names to lowercase for case-insensitive matching
+        df.columns = df.columns.str.lower()
 
-            if df['Time'].isna().all():
-                print(f"File {os.path.basename(file_path)} has invalid or missing 'Time' values. Skipping.")
-                continue
+        # Required columns (case-insensitive)
+        required_columns = {'time', 'phase', 'lf/hf'}
 
-            # Calculate elapsed time in minutes from the first timestamp
-            start_time = df['Time'].iloc[0]
-            df['Elapsed_Minutes'] = (df['Time'] - start_time).dt.total_seconds() / 60
+        # Check for missing required columns
+        missing_columns = required_columns - set(df.columns)
+        if missing_columns:
+            print(f"File is missing the following required columns: {', '.join(missing_columns)}. Exiting.")
+            return
 
-            # Calculate the average LF/HF for each phase
-            phase_averages = df.groupby('Phase')['LF/HF'].mean()
+        # Convert the `time` column to datetime format
+        df['time'] = pd.to_datetime(df['time'], format='%H:%M:%S', errors='coerce')
 
-            print("Average LF/HF per Phase:")
-            print(phase_averages)
+        if df['time'].isna().all():
+            print("The 'time' column has invalid or missing values. Exiting.")
+            return
 
-            # Plot the time series
-            plt.figure(figsize=(10, 6))
-            legend_labels = []
+        # Calculate elapsed time in minutes from the first timestamp
+        start_time = df['time'].iloc[0]
+        df['elapsed_minutes'] = (df['time'] - start_time).dt.total_seconds() / 60
 
-            for phase, phase_data in df.groupby('Phase'):
-                plt.plot(phase_data['Elapsed_Minutes'], phase_data['LF/HF'], label=f'Phase {phase}')
-                legend_labels.append(f'Phase {phase} (Avg: {phase_averages[phase]:.2f})')
+        # Calculate the average LF/HF for each phase
+        phase_averages = df.groupby('phase')['lf/hf'].mean()
 
-            # Customize the plot
-            plt.title(f'LF/HF Ratio Over Time by Phase ({os.path.basename(file_path)})')
-            plt.xlabel('Time (minutes)')
-            plt.ylabel('LF/HF Values')
-            plt.legend(legend_labels, loc='upper left')
-            plt.grid(True)
+        print("Average LF/HF per Phase:")
+        print(phase_averages)
 
-            # Save the plot
-            output_file = os.path.join(output_folder, f"{os.path.splitext(os.path.basename(file_path))[0]}_graph.png")
-            plt.savefig(output_file)
-            plt.close()
-            print(f"Saved graph: {output_file}")
+        # Create the figure and axes for interactive plotting
+        fig, ax = plt.subplots(figsize=(10, 6))
 
-        except Exception as e:
-            print(f"Error processing file {os.path.basename(file_path)}: {e}")
+        legend_labels = []
+        for phase, phase_data in df.groupby('phase'):
+            ax.plot(phase_data['elapsed_minutes'], phase_data['lf/hf'], label=f'Phase {phase}')
+            legend_labels.append(f'Phase {phase} (Avg: {phase_averages[phase]:.2f})')
 
-    print("Processing completed. All graphs saved in the 'Processed_Graphs' folder.")
+        # Customize the plot
+        ax.set_title(f'LF/HF Ratio Over Time by Phase\nFile: {file_path.split("/")[-1]}')
+        ax.set_xlabel('Time (minutes)')
+        ax.set_ylabel('LF/HF Values')
+        ax.legend(legend_labels, loc='upper left')
+        ax.grid(True)
 
+        # Add interactivity: enable zooming and panning
+        ax.set_xlim(df['elapsed_minutes'].min(), df['elapsed_minutes'].max())
+        ax.set_ylim(df['lf/hf'].min() * 0.9, df['lf/hf'].max() * 1.1)
+
+        # Add a cursor for easier tracking
+        cursor = Cursor(ax, useblit=True, color='red', linewidth=1)
+
+        # Connect mouse wheel event for zooming
+        fig.canvas.mpl_connect('scroll_event', lambda event: zoom(event, ax))
+
+        # Enable tight layout to handle resizing better
+        plt.tight_layout()
+
+        # Show the interactive plot
+        plt.show()
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
 # Run the program
-process_spreadsheets()
+process_spreadsheet()
